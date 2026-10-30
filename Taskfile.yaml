@@ -46,6 +46,10 @@ includes:
   tests:
     taskfile: tests/Taskfile.yaml
     dir: .
+  # OCM tasks: `task ocm:ctf`, `task ocm:verify`, `task ocm:clean`, ...
+  ocm:
+    taskfile: ocm/Taskfile.yaml
+    dir: .
 
 vars:
   COMPONENTS:

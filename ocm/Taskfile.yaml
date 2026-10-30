@@ -1,0 +1,61 @@
+# Copyright The Platform Mesh Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+version: "3"
+
+vars:
+  # Must be a published Platform Mesh version: images/*:VERSION and
+  # helm-charts/*:VERSION are referenced, not built.
+  VERSION:
+    sh: git describe --tags --abbrev=0 | sed 's/^v//'
+  CTF: ocm/.generated/ctf
+  CONSTRUCTOR: ocm/.generated/constructor.yaml
+  OCM_REPO_UPSTREAM: ghcr.io/platform-mesh
+  AGGREGATE: github.com/platform-mesh/platform-mesh
+
+tasks:
+  ctf:
+    desc: "Build the OCM graph for a published VERSION into {{.CTF}} (default: latest tag)."
+    cmds:
+      - >-
+        hack/release/build-aggregate.sh
+        --version {{.VERSION}}
+        --ocm-repo ctf::{{.CTF}}
+        --chart-repo {{.OCM_REPO_UPSTREAM}}/helm-charts
+        --mirror-from {{.OCM_REPO_UPSTREAM}}
+        --skip-charts
+
+  verify:
+    desc: "Print the graph in {{.CTF}} and fail on any image/chart reference without a digest."
+    cmds:
+      - |
+        set -u
+        source hack/release/tools.sh
+        require_tools ocm yq || exit 1
+        "$OCM" get component-version "ctf::{{.CTF}}//{{.AGGREGATE}}:{{.VERSION}}" --recursive || exit 1
+        missing=0
+        while IFS=: read -r name version; do
+          undigested=$("$OCM" get component-version "ctf::{{.CTF}}//$name:$version" -o yaml 2>/dev/null \
+            | "$YQ" '.[0].component.resources[] | select(.access.imageReference != null and .digest == null) | .name')
+          [ -z "$undigested" ] && continue
+          echo "$name:$version: no digest on $(echo "$undigested" | paste -sd, -)" >&2
+          missing=$((missing + 1))
+        done < <("$YQ" '.components[] | .name + ":" + .version' {{.CONSTRUCTOR}})
+        [ "$missing" -eq 0 ] || { echo "$missing component version(s) with unresolved references" >&2; exit 1; }
+        echo "all references in {{.AGGREGATE}}:{{.VERSION}} resolved"
+
+  clean:
+    desc: "Remove the local CTF and generated constructor."
+    cmds:
+      - rm -rf {{.CTF}} {{.CONSTRUCTOR}}
